@@ -1,0 +1,219 @@
+---
+title: "msas_qb"
+author: "By Josh Pomerantz"
+date: "2025-04-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+pbp23 <- load_pbp(2023) %>%
+  select(passer_player_name, posteam) %>%
+  filter(posteam == "NYJ")
+
+pbp <- load_pbp(2019:2023) 
+
+qb_clutch_epa_play <- pbp %>%
+  filter(pass == 1 | rush == 1) %>%
+  filter(!is.na(epa)) %>% 
+  filter(qtr == 4) %>%
+  filter(score_differential %in% c(-8:-1)) %>%
+  group_by(id) %>%
+  summarize(name = first(name), team = last(posteam), plays = n(), epa_play = mean(epa), 
+            pass_attempts = sum(incomplete_pass + complete_pass, na.rm = T)) %>%
+  filter(plays >= 125) %>%
+  mutate(pass_rate = pass_attempts/plays) %>%
+  left_join(teams_colors_logos, by  = c("team" = "team_abbr"))
+
+qb_clutch_epa_play %>%
+  ggplot(aes(x = epa_play, y = fct_reorder(name, epa_play))) + 
+  geom_bar(aes(fill = team_color, color = team_color2), stat = "identity", alpha = 0.9) + 
+  scale_color_identity(aesthetics = c("fill", "color")) +
+  theme_bw() + 
+  geom_image(aes(image = team_logo_espn, x = ifelse(epa_play > 0,
+                                                    epa_play + 0.01, epa_play - 0.01)), asp = 16/9, size = 0.03) +
+  labs(x = "EPA/Play in 4th Quarter Trailing by 1 Score", y = "Quarterback", title = "Quarterback's Clutch Time EPA/Play, 2019-2023", 
+       subtitle = "Minimum of 125 plays to qualify") + 
+  theme(panel.grid.major = element_blank(),
+        plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(size = 16, hjust = 0.5))
+
+ggsave('bar-clutch-time-epa.png', width = 14, height = 10, dpi = "retina")
+
+
+  
+```
+
+
+```{r}
+qb_conv_rate_vs_epa <- pbp %>%
+  filter(pass == 1 | rush == 1) %>%
+  filter(!is.na(epa)) %>%
+  filter(qtr == 3 | qtr == 4 | qtr == 5) %>%
+  group_by(id) %>%
+  summarize(name = first(name), team = last(posteam), plays = n(), 
+            epa_play = mean(epa), late_down_plays = sum(third_down_converted + 
+                                                          third_down_failed +
+                                                          fourth_down_converted +
+                                                          fourth_down_failed, na.rm = T),
+            late_down_conv = sum(third_down_converted + fourth_down_converted, na.rm = T)) %>%
+  mutate(late_down_conv_rate = late_down_conv/late_down_plays) %>%
+  filter(late_down_plays > 300) %>%
+  left_join(teams_colors_logos, by = c("team"= "team_abbr"))
+
+
+qb_conv_rate_vs_epa %>%
+  ggplot(aes(x = late_down_conv_rate, y = epa_play)) + 
+  geom_point(aes(fill = team_color, color = team_color2, size = late_down_plays), shape = 21,
+             alpha = 0.9) + 
+  scale_color_identity(aesthetics = c("fill", "color")) + 
+  geom_text_repel(aes(label = name)) + 
+  theme_bw() +
+  geom_hline(yintercept = mean(qb_conv_rate_vs_epa$epa_play), linetype = 'dashed')+
+  geom_vline(xintercept = mean(qb_conv_rate_vs_epa$late_down_conv_rate), linetype = 'dashed') + 
+  labs(x = "2nd Half Late Down Conversion Rate", y = "2nd Half EPA/Play",
+       title = "2nd Half EPA/Play and Late Down Conversion Rate, 2019-2023",
+       subtitle = "Minimum of 300 Late Down 2nd Half Plays",
+       size = "Late Down Plays") + 
+  theme(plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(size = 16, hjust = 0.5))
+
+ggsave('late_down_conv_vs_epa.png', width = 14, height = 10, dpi = "retina")
+```
+
+
+```{r}
+library(nflfastR)
+library(tidyverse)
+library(ggimage)
+library(gt)
+library(gtExtras)
+library(ggthemes)
+library(ggrepel)
+
+redzone_data <-pbp %>%
+  filter(yardline_100 <= 20) %>%
+  filter(!is.na(epa)) 
+
+
+redzone_data %>%
+  filter(rush == 1 | pass == 1) %>%
+  filter(!is.na(epa)) %>%
+  group_by(passer_player_name) %>%
+  summarize(name = first(name), 
+            team = last(posteam),
+            plays = n(), epa_play = mean(epa),
+            pass_attempts = sum(complete_pass + incomplete_pass, na.rm = T),
+            completed_passes = sum(complete_pass, na.rm = T),
+            completion_rate = sum(complete_pass, na.rm = T)/sum(complete_pass + incomplete_pass, na.rm = T),
+            touchdowns = sum(pass_touchdown, na.rm = T),
+            interceptions = sum(interception, na.rm = T)) %>%
+  filter(pass_attempts > 300) %>%
+  mutate(td_int_ratio = touchdowns/interceptions) %>%
+  left_join(teams_colors_logos, by = c("team" = "team_abbr"))
+
+redzone_data %>%
+  arrange(-epa_play) %>%
+  mutate(rank = row_number()) %>%
+  select(rank, name, team_wordmark, completion_rate, td_int_ratio, epa_play) %>%
+  mutate(completion_rate = 100 * round(completion_rate, 3),
+         td_int_ratio = round(td_int_ratio, 1),
+         epa_play = round(epa_play, 3)) %>%
+  gt() %>%
+  cols_align(align = "center") %>%
+  gt_img_rows(team_wordmark) %>%
+  cols_label(rank = "Rank",
+             name = "Quarterback",
+             team_wordmark = "",
+             completion_rate = "Completion Rate",
+             td_int_ratio = "TD:Interception Ratio",
+             epa_play = "EPA Per Play") %>%
+  gt_theme_538() %>%
+  gt_hulk_col_numeric(epa_play) %>%
+  tab_header(title = "Red Zone Quarterback Statistics", subtitle = "Minimum 300 Red Zone pass attempts to qualify")
+
+gtsave(gt_redzone, "gt_redzone.png")
+
+
+
+```
+
+
+```{r}
+qb_wp_less_50 <- pbp %>%
+  filter(pass == 1 | rush == 1) %>%
+  filter(!is.na(epa)) %>% 
+  filter(wp < 0.50) %>%
+  filter(qtr == 3 | qtr == 4 | qtr == 5) %>%
+  group_by(id) %>%
+  summarize(name = first(name), team = last(posteam), plays = n(), epa_play = mean(epa), 
+            pass_attempts = sum(incomplete_pass + complete_pass, na.rm = T)) %>%
+  filter(pass_attempts >= 450) %>%
+  left_join(teams_colors_logos, by  = c("team" = "team_abbr"))
+
+qb_wp_less_50 %>%
+  ggplot(aes(x = epa_play, y = fct_reorder(name, epa_play))) + 
+  geom_bar(aes(fill = team_color, color = team_color2), stat = "identity", alpha = 0.9) + 
+  scale_color_identity(aesthetics = c("fill", "color")) +
+  theme_bw() + 
+  geom_image(aes(image = team_logo_espn, x = ifelse(epa_play > 0,
+                                                    epa_play + 0.01, epa_play - 0.01)), asp = 16/9, size = 0.03) +
+  labs(x = "EPA/Play in 2nd Half when Winning Probability is less than 50%", y = "Quarterback", title = "Quarterback's Underdog EPA/Play, 2019-2023", 
+       subtitle = "Minimum of 450 pass attempts to qualify") + 
+  theme(panel.grid.major = element_blank(),
+        plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(size = 16, hjust = 0.5))
+
+
+ggsave('bar-underdog--epa.png', width = 14, height = 10, dpi = "retina")
+```
+
+
+
+
+```{r}
+library(scales)
+
+qb_clutch_pass_rate_epa <- pbp %>%
+  filter(pass == 1 | rush == 1) %>%
+  filter(!is.na(epa)) %>%
+  filter(qtr == 4) %>%
+  filter(score_differential %in% c(-8:8)) %>%
+  group_by(id) %>%
+  summarize(name = first(name), team = last(posteam), plays = n(), 
+            epa_play = mean(epa),
+            pass_attempts = sum(complete_pass + incomplete_pass, na.rm = T)) %>%
+  mutate(pass_rate = pass_attempts/plays) %>%
+  filter(plays > 300) %>%
+  left_join(teams_colors_logos, by = c("team" = "team_abbr"))
+
+
+
+qb_clutch_pass_rate_epa %>%
+  ggplot(aes(x = pass_rate, y = epa_play)) + 
+  geom_point(aes(fill = team_color, color = team_color2, size = plays), 
+             shape = 21, alpha = 0.9) + 
+  scale_color_identity(aesthetics = c("fill", "color")) +
+  geom_text_repel(aes(label = name)) + 
+  theme_bw() +
+  geom_hline(yintercept = mean(qb_clutch_pass_rate_epa$epa_play), linetype = 'dashed') + 
+  geom_vline(xintercept = mean(qb_clutch_pass_rate_epa$pass_rate), linetype = 'dashed') + 
+  labs(x = "Pass Rate", y = "EPA/Play",
+       title = "4th Quarter EPA/Play and Pass Rate in 1 score games, 2019-2023",
+       subtitle = "Minimum of 300 corresponding plays to qualify",
+       size = "Plays") + 
+  theme(plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(size = 16, hjust = 0.5)) + 
+  scale_x_continuous(breaks = pretty_breaks(n = 8)) + 
+  scale_y_continuous(breaks = pretty_breaks(n = 8))
+
+ggsave('epa_play_pass_rate_clutch.png', width = 14, height = 10, dpi = "retina")
+
+
+  
+```
+
